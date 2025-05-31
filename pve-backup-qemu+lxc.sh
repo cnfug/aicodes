@@ -4,45 +4,95 @@ set -e
  
 # 配置区 
 BACKUP_STORAGE="local"
-KEEP_BACKUPS=5
+KEEP_BACKUPS=2 
 SNAPSHOT_SIZE="1G"
 BACKUP_BASE="/var/lib/vz"
 BACKUP_DIR="$BACKUP_BASE/dump"
-ZSTD_LEVEL="-19"
+ZSTD_LEVEL="-10"
+SPECIAL_DATES=(5 10 15 20 25 30)  # 特殊日期数组
  
 mkdir -p "$BACKUP_DIR"
  
-# QEMU备份函数（完全保持原始EOF结构）
+# 判断是否为特殊日期备份 
+is_special_date_backup() {
+    local file="$1"
+    if [[ $file =~ [0-9]{8} ]]; then 
+        local day=${BASH_REMATCH[0]:6:2}
+        day=$((10#$day))  # 去除前导零 
+        for special_day in "${SPECIAL_DATES[@]}"; do
+            if [ "$day" -eq "$special_day" ]; then 
+                return 0
+            fi 
+        done
+    fi 
+    return 1
+}
+ 
+# 增强的备份清理函数 
+cleanup_backups() {
+    local pattern="$1"
+    local keep="$KEEP_BACKUPS"
+    echo "🧹 执行备份清理（普通保留${KEEP_BACKUPS}份，特殊日期保留3份）..."
+    
+    # 处理普通备份
+    find "$BACKUP_DIR" -name "$pattern" -printf "%T@ %p\n" | sort -rn | while read -r ts file; do
+        if ! is_special_date_backup "$file"; then
+            if [ "$keep" -gt 0 ]; then
+                keep=$((keep - 1))
+                echo "✅ 保留普通备份: $(basename "$file")"
+            else
+                [ -f "$file" ] && rm -v "$file"
+            fi
+        fi 
+    done
+    
+    # 处理特殊日期备份
+    for special_day in "${SPECIAL_DATES[@]}"; do 
+        local count=0 
+        find "$BACKUP_DIR" -name "$pattern" -printf "%T@ %p\n" | sort -rn | while read -r ts file; do
+            if is_special_date_backup "$file" && [[ $file =~ [0-9]{8} ]] && [ "${BASH_REMATCH[0]:6:2}" -eq "$special_day" ]; then 
+                if [ "$count" -lt 3 ]; then
+                    echo "⭐ 保留特殊日期($special_day)备份: $(basename "$file")"
+                    count=$((count + 1))
+                else 
+                    [ -f "$file" ] && rm -v "$file"
+                fi 
+            fi
+        done 
+    done
+}
+ 
+# QEMU备份函数
 perform_backup_qemu() {
-  VMID="$1"
-  DISK="$2"
-  
-  # 参数校验
-  if ! qm list | awk 'NR>1{print $1}' | grep -q "^$VMID$"; then 
-    echo "❌ 错误：虚拟机 VMID $VMID 不存在"
-    exit 1
-  fi 
+    VMID="$1"
+    DISK="$2"
+    
+    # 参数校验
+    if ! qm list | awk 'NR>1{print $1}' | grep -q "^$VMID$"; then 
+        echo "❌ 错误：虚拟机 VMID $VMID 不存在"
+        exit 1 
+    fi
  
-  VOLID=$(qm config "$VMID" | grep "^$DISK:" | grep -oP '(local.*?:[^, ]+|/dev/[^ ,]+)')
-  LVM_PATH=$(pvesm path "$VOLID" 2>/dev/null || echo "$VOLID")
-  VG_NAME=$(lvs --noheadings -o vg_name "$LVM_PATH" | xargs)
-  LV_NAME=$(lvs --noheadings -o lv_name "$LVM_PATH" | xargs)
-  TS=$(date +%Y%m%d-%H%M%S)
-  SAFE_DISK=$(echo "$DISK" | tr -c 'a-zA-Z0-9' '_')
-  FILENAME="vzdump-qemu-${VMID}-${SAFE_DISK}-${TS}"
-  BACKUP_FILE="$BACKUP_DIR/${FILENAME}.img.zst"  
-  CONF_FILE="$BACKUP_DIR/${FILENAME}.conf"
-  SNAP_NAME="${LV_NAME}_snapshot"
-  SNAP_PATH="/dev/$VG_NAME/$SNAP_NAME"
+    VOLID=$(qm config "$VMID" | grep "^$DISK:" | grep -oP '(local.*?:[^, ]+|/dev/[^ ,]+)')
+    LVM_PATH=$(pvesm path "$VOLID" 2>/dev/null || echo "$VOLID")
+    VG_NAME=$(lvs --noheadings -o vg_name "$LVM_PATH" | xargs)
+    LV_NAME=$(lvs --noheadings -o lv_name "$LVM_PATH" | xargs)
+    TS=$(date +%Y%m%d-%H%M%S)
+    SAFE_DISK=$(echo "$DISK" | tr -c 'a-zA-Z0-9' '_')
+    FILENAME="vzdump-qemu-${VMID}-${SAFE_DISK}-${TS}"
+    BACKUP_FILE="$BACKUP_DIR/${FILENAME}.img.zst"  
+    CONF_FILE="$BACKUP_DIR/${FILENAME}.conf"
+    SNAP_NAME="${LV_NAME}_snapshot"
+    SNAP_PATH="/dev/$VG_NAME/$SNAP_NAME"
  
-  echo "📸 创建快照 $SNAP_NAME ..."
-  lvremove -f "$SNAP_PATH" &>/dev/null || true
-  lvcreate -s -n "$SNAP_NAME" -L "$SNAPSHOT_SIZE" "$LVM_PATH"
+    echo "📸 创建快照 $SNAP_NAME ..."
+    lvremove -f "$SNAP_PATH" &>/dev/null || true 
+    lvcreate -s -n "$SNAP_NAME" -L "$SNAPSHOT_SIZE" "$LVM_PATH"
  
-  echo "📦 压缩中：$BACKUP_FILE"
-  dd if="$SNAP_PATH" bs=4M status=progress | zstd $ZSTD_LEVEL -T0 -o "$BACKUP_FILE"
-  lvremove -f "$SNAP_PATH"
-  
+    echo "📦 压缩中：$BACKUP_FILE"
+    dd if="$SNAP_PATH" bs=4M status=progress | zstd $ZSTD_LEVEL -T0 -o "$BACKUP_FILE"
+    lvremove -f "$SNAP_PATH"
+ 
   echo "📜 写入配置：$CONF_FILE"
   cat > "$CONF_FILE" <<EOF
 {
@@ -54,45 +104,36 @@ perform_backup_qemu() {
   "vmid": "$VMID"
 }
 EOF
-  echo "🧹 清理旧备份（保留最新$KEEP_BACKUPS个）..."
-  for suffix in "img.zst"  "conf"; do 
-    ls -t "$BACKUP_DIR/vzdump-qemu-${VMID}-${SAFE_DISK}-"*.$suffix 2>/dev/null | \
-      tail -n +$(($KEEP_BACKUPS + 1)) | \
-      while read -r old_file; do 
-        [ -f "$old_file" ] && rm -v "$old_file"
-      done 
-  done 
  
-  echo "✅ 备份完成：$BACKUP_FILE"
+    # 调用增强的清理函数
+    for suffix in "img.zst"  "conf"; do
+        cleanup_backups "vzdump-qemu-${VMID}-${SAFE_DISK}-*.$suffix"
+    done
+    echo "✅ 备份完成：$BACKUP_FILE"
 }
  
 # LXC备份函数
 perform_backup_lxc() {
-  CTID="$1"
-  
-  # 参数校验
-  if ! pct list | awk 'NR>1{print $1}' | grep -q "^$CTID$"; then 
-    echo "❌ 错误：容器 CTID $CTID 不存在"
-    exit 1 
-  fi
+    CTID="$1"
+    
+    # 参数校验
+    if ! pct list | awk 'NR>1{print $1}' | grep -q "^$CTID$"; then 
+        echo "❌ 错误：容器 CTID $CTID 不存在"
+        exit 1 
+    fi
  
-  TS=$(date +%Y%m%d-%H%M%S)
-  LOGFILE="$BACKUP_DIR/lxc-${CTID}-${TS}.log"
-  echo "📦 开始备份 LXC 容器 $CTID ..."
-  vzdump "$CTID" --mode snapshot --compress zstd --dumpdir "$BACKUP_DIR" --remove 0 2>&1 | tee "$LOGFILE"
+    TS=$(date +%Y%m%d-%H%M%S)
+    LOGFILE="$BACKUP_DIR/lxc-${CTID}-${TS}.log"
+    echo "📦 开始备份 LXC 容器 $CTID ..."
+    vzdump "$CTID" --mode snapshot --compress zstd --dumpdir "$BACKUP_DIR" --remove 0 2>&1 | tee "$LOGFILE"
  
-  echo "🧹 清理旧备份（保留最新$KEEP_BACKUPS个）..."
-  for suffix in "tar.zst"  "log"; do 
-    ls -t "$BACKUP_DIR/vzdump-lxc-${CTID}-"*.$suffix 2>/dev/null | \
-      tail -n +$(($KEEP_BACKUPS + 1)) | \
-      while read -r old_file; do 
-        [ -f "$old_file" ] && rm -v "$old_file"
-      done 
-  done 
+    # 调用增强的清理函数 
+    for suffix in "tar.zst"  "log"; do 
+        cleanup_backups "vzdump-lxc-${CTID}-*.$suffix"
+    done
  
-  echo "✅ 容器 $CTID 备份完成（日志：$LOGFILE）"
+    echo "✅ 容器 $CTID 备份完成（日志：$LOGFILE）"
 }
- 
 # 显示备份文件列表
 show_backup_list() {
   declare -A qemu_backups lxc_backups 
@@ -105,26 +146,20 @@ show_backup_list() {
     SIZE=$(jq -r .size "$conf")
     CTIME=$(jq -r .ctime "$conf")
     FILE="$(basename "$conf" .conf).img.zst"  
-    
     SIZE_FMT=$(printf "%.2fG" $(echo "$SIZE / 1024 / 1024 / 1024" | bc -l))
     TIME_FMT=$(date -d "@$CTIME" "+%Y-%m-%d %H:%M:%S")
-    
     qemu_backups["$VMID"]+="$TIME_FMT\t$SIZE_FMT\t$DISK\t$FILE\n"
   done 
- 
   # 收集LXC备份信息 
   for file in "$BACKUP_DIR"/vzdump-lxc-*.tar.zst;   do 
     [ -f "$file" ] || continue
     CTID=$(basename "$file" | grep -oP 'vzdump-lxc-\K[0-9]+')
     CTIME=$(stat -c %Y "$file")
     SIZE=$(stat -c %s "$file")
-    
     SIZE_FMT=$(printf "%.2fG" $(echo "$SIZE / 1024 / 1024 / 1024" | bc -l))
     TIME_FMT=$(date -d "@$CTIME" "+%Y-%m-%d %H:%M:%S")
-    
     lxc_backups["$CTID"]+="$TIME_FMT\t$SIZE_FMT\t$(basename "$file")\n"
   done 
- 
   # 显示QEMU备份（按VMID排序）
   echo -e "\n🖥 QEMU虚拟机备份列表（按VMID归类）"
   echo "========================================"
@@ -281,9 +316,10 @@ main() {
   fi
  
   # 交互模式 
+  echo "PVE虚拟机自动备份脚本，支持计划任务"
   echo "🛠 请选择操作："
-  echo "  [1] 备份虚拟机或容器（自动识别）"
-  echo "  [2] 恢复虚拟机或容器（自动识别）"
+  echo "  [1] 备份虚拟机或容器"
+  echo "  [2] 恢复虚拟机或容器"
   echo "  [3] 显示备份文件列表"
   read -p "输入数字（1/2/3）: " ACTION 
  
@@ -297,13 +333,13 @@ main() {
  
 # 启动脚本（修复参数处理）
 case $# in 
-  0) main ;;
-  1|2) main "$@" ;;
-  *) 
-    echo "❌ 参数错误！正确用法："
-    echo "备份 LXC 容器: $0 <CTID>"
-    echo "备份 QEMU 虚拟机: $0 <VMID> <DISK>"
-    echo "交互模式: $0"
-    exit 1 
-    ;;
-esac 
+    0) main ;;
+    1|2) main "$@" ;;
+    *)
+        echo "❌ 参数错误！正确用法："
+        echo "备份 LXC 容器: $0 <CTID>"
+        echo "备份 QEMU 虚拟机: $0 <VMID> <DISK>"
+        echo "交互模式: $0"
+        exit 1
+        ;;
+esac
