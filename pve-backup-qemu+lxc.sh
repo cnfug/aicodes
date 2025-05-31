@@ -4,7 +4,7 @@ set -e
  
 # 配置区 
 BACKUP_STORAGE="local"
-KEEP_BACKUPS=2 
+KEEP_BACKUPS=3 
 SNAPSHOT_SIZE="1G"
 BACKUP_BASE="/var/lib/vz"
 BACKUP_DIR="$BACKUP_BASE/dump"
