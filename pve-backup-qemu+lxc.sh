@@ -2,17 +2,17 @@
  
 set -e 
  
-# 配置区（完全保持原始格式）
+# 配置区
 BACKUP_STORAGE="local"
 KEEP_BACKUPS=5 
 SNAPSHOT_SIZE="1G"
 BACKUP_BASE="/var/lib/vz"
 BACKUP_DIR="$BACKUP_BASE/dump"
-ZSTD_LEVEL="-19"
+ZSTD_LEVEL="-19" #最高压缩
  
 mkdir -p "$BACKUP_DIR"
  
-# QEMU备份函数（完全保持原始EOF结构）
+# QEMU备份函数
 perform_backup_qemu() {
   VMID="$1"
   DISK="$2"
@@ -35,8 +35,6 @@ perform_backup_qemu() {
   echo "📦 压缩中：$BACKUP_FILE"
   dd if="$SNAP_PATH" bs=4M status=progress | zstd $ZSTD_LEVEL -T0 -o "$BACKUP_FILE"
   lvremove -f "$SNAP_PATH"
- 
-  # 严格保持原始EOF结构（未做任何修改）
   echo "📜 写入配置：$CONF_FILE"
   cat > "$CONF_FILE" <<EOF 
 {
@@ -49,7 +47,7 @@ perform_backup_qemu() {
 }
 EOF
  
-  # 新增的备份清理功能（不涉及EOF修改）
+  #备份清理功能
   echo "🧹 清理旧备份（保留最新$KEEP_BACKUPS个）..."
   for suffix in "img.zst"  "conf"; do 
     ls -t "$BACKUP_DIR/vzdump-qemu-${VMID}-${SAFE_DISK}-"*.$suffix 2>/dev/null | \
@@ -62,7 +60,7 @@ EOF
   echo "✅ 备份完成：$BACKUP_FILE"
 }
  
-# LXC备份函数（完全保持原始结构）
+# LXC备份函数
 perform_backup_lxc() {
   CTID="$1"
   TS=$(date +%Y%m%d-%H%M%S)
@@ -70,7 +68,7 @@ perform_backup_lxc() {
   echo "📦 开始备份 LXC 容器 $CTID ..."
   vzdump "$CTID" --mode snapshot --compress zstd --dumpdir "$BACKUP_DIR" --remove 0 2>&1 | tee "$LOGFILE"
  
-  # 新增的备份清理功能 
+  # 备份清理功能 
   echo "🧹 清理旧备份（保留最新$KEEP_BACKUPS个）..."
   for suffix in "tar.zst"  "log"; do 
     ls -t "$BACKUP_DIR/vzdump-lxc-${CTID}-"*.$suffix 2>/dev/null | \
@@ -139,7 +137,7 @@ show_backup_list() {
 }
 
  
-# 交互式备份菜单（原有逻辑不变）
+# 交互式备份菜单
 perform_backup_interactive_combined() {
   echo "📋 当前系统中的虚拟机与容器："
   VM_LIST=$(qm list | awk 'NR>1')
@@ -194,7 +192,7 @@ perform_backup_interactive_combined() {
   fi 
 }
  
-# 恢复功能（原有逻辑不变）
+# 恢复功能
 recover_auto() {
   echo "📁 可用备份文件列表（支持 QEMU 和 LXC）："
   declare -A INDEX_MAP
