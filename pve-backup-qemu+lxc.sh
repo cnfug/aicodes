@@ -1,4 +1,3 @@
-root@pve:~# cat dp4.sh
 #!/bin/bash 
  
 set -e 
