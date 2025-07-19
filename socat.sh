@@ -1,6 +1,6 @@
 #!/bin/bash
 # 多功能 socat 转发脚本
-# 支持 TCP/UDP 转发、systemd 服务管理
+# 支持 TCP/UDP 转发、systemd 服务管理及防火墙自动配置
 
 # 颜色定义
 RED='\033[0;31m'
@@ -27,6 +27,79 @@ if ! command -v socat &> /dev/null; then
     fi
     echo -e "${GREEN}socat 安装成功！${NC}"
 fi
+
+# 检测防火墙类型
+detect_firewall() {
+    if command -v ufw &> /dev/null; then
+        echo "ufw"
+    elif command -v firewall-cmd &> /dev/null; then
+        echo "firewalld"
+    elif command -v iptables &> /dev/null; then
+        echo "iptables"
+    else
+        echo "none"
+    fi
+}
+
+# 添加防火墙规则
+add_firewall_rule() {
+    local proto=$1
+    local port=$2
+    local firewall=$(detect_firewall)
+    
+    echo -e "${YELLOW}正在添加防火墙规则允许 ${proto^^} ${port} 端口...${NC}"
+    
+    case $firewall in
+        ufw)
+            ufw allow ${port}/${proto}
+            ;;
+        firewalld)
+            firewall-cmd --zone=public --add-port=${port}/${proto} --permanent
+            firewall-cmd --reload
+            ;;
+        iptables)
+            iptables -A INPUT -p ${proto} --dport ${port} -j ACCEPT
+            # 保存规则
+            if command -v iptables-save &> /dev/null; then
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}未检测到支持的防火墙，跳过防火墙规则设置。${NC}"
+            ;;
+    esac
+}
+
+# 删除防火墙规则
+remove_firewall_rule() {
+    local proto=$1
+    local port=$2
+    local firewall=$(detect_firewall)
+    
+    echo -e "${YELLOW}正在删除防火墙规则禁用 ${proto^^} ${port} 端口...${NC}"
+    
+    case $firewall in
+        ufw)
+            ufw delete allow ${port}/${proto}
+            ;;
+        firewalld)
+            firewall-cmd --zone=public --remove-port=${port}/${proto} --permanent
+            firewall-cmd --reload
+            ;;
+        iptables)
+            iptables -D INPUT -p ${proto} --dport ${port} -j ACCEPT 2>/dev/null
+            # 保存规则
+            if command -v iptables-save &> /dev/null; then
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}未检测到支持的防火墙，跳过防火墙规则清理。${NC}"
+            ;;
+    esac
+}
 
 # 服务名生成函数
 generate_service_name() {
@@ -136,7 +209,7 @@ show_all_status() {
     echo -e "${GREEN}-----------------------------------------------${NC}"
 }
 
-# 停止服务（优化版本）
+# 停止服务
 stop_service() {
     echo -e "${YELLOW}===== 停止并禁用转发服务 ====${NC}"
     
@@ -203,6 +276,7 @@ stop_service() {
     # 获取对应的服务
     local selected_index=$(($choice - 1))
     read proto service_name <<< "${all_services[$selected_index]}"
+    local port=$(echo $service_name | grep -oP "${proto}-\K[0-9]+")
     local service_file="socat-${service_name}.service"
     
     echo -e "${YELLOW}正在停止并禁用服务 ${service_file}...${NC}"
@@ -210,6 +284,9 @@ stop_service() {
     systemctl disable ${service_file}
     rm -f /etc/systemd/system/${service_file}
     systemctl daemon-reload
+    
+    # 删除防火墙规则
+    remove_firewall_rule $proto $port
     
     echo -e "${GREEN}服务 ${service_file} 已停止并禁用！${NC}"
     pause
@@ -220,7 +297,7 @@ stop_service() {
 main_menu() {
     clear
     echo -e "${GREEN}=====================================${NC}"
-    echo -e "${GREEN}       Socat 转发脚本 v1.0       ${NC}"
+    echo -e "${GREEN}      Socat 转发脚本 v1.1                 ${NC}"
     echo -e "${GREEN}=====================================${NC}"
     echo -e "${YELLOW}1. 创建 TCP 端口转发${NC}"
     echo -e "${YELLOW}2. 创建 UDP 端口转发${NC}"
@@ -270,6 +347,8 @@ create_forward() {
     
     create_service $proto $src_port $dest_addr $dest_port
     start_service $proto $src_port
+    # 添加防火墙规则
+    add_firewall_rule $proto $src_port
     show_status $proto $src_port
     
     pause
