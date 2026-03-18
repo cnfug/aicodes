@@ -114,53 +114,6 @@ function parseCookies(cookieHeader) {
     return cookies;
 }
 
-// 密码复杂度验证函数
-function validatePasswordComplexity(password) {
-    if (!password || password.length < 8) {
-        return { valid: false, message: '密码长度不能少于8位' };
-    }
-    
-    // 检查是否包含大写字母
-    if (!/[A-Z]/.test(password)) {
-        return { valid: false, message: '密码必须包含至少一个大写字母' };
-    }
-    
-    // 检查是否包含小写字母
-    if (!/[a-z]/.test(password)) {
-        return { valid: false, message: '密码必须包含至少一个小写字母' };
-    }
-    
-    // 检查是否包含数字
-    if (!/[0-9]/.test(password)) {
-        return { valid: false, message: '密码必须包含至少一个数字' };
-    }
-    
-    // 检查是否包含特殊字符
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-        return { valid: false, message: '密码必须包含至少一个特殊字符' };
-    }
-    
-    return { valid: true };
-}
-
-// 安全错误响应生成函数
-function createErrorResponse(error, status = 500, isDevelopment = false) {
-    const errorMessage = isDevelopment ? error.message : '服务器内部错误，请稍后重试';
-    return new Response(JSON.stringify({ error: errorMessage }), {
-        status: status,
-        headers: { 'Content-Type': 'application/json' }
-    });
-}
-
-// 安全日志记录函数
-function secureLog(message, error, isSensitive = false) {
-    if (isSensitive) {
-        console.error(message, 'Sensitive data hidden');
-    } else {
-        console.error(message, error);
-    }
-}
-
 // 生成认证token（基于密码的固定token，添加时间戳用于过期验证）
 async function generateToken(password, timestamp = null) {
     // 统一使用秒级时间戳，确保与验证逻辑一致
@@ -352,7 +305,10 @@ export default {
       
       return new Response('Not Found', { status: 404 });
     } catch (error) {
-      return createErrorResponse(error, 500, false);
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
   }
   
@@ -366,7 +322,7 @@ export default {
       const data = await env.SERVER_MONITOR?.get('servers_index');
       return data ? JSON.parse(data) : [];
     } catch (error) {
-      secureLog('Failed to get server index', error, false);
+      console.error('Failed to get server index:', error);
       return [];
     }
   }
@@ -376,7 +332,7 @@ export default {
     try {
       await env.SERVER_MONITOR?.put('servers_index', JSON.stringify(index));
     } catch (error) {
-      secureLog('Failed to save server index', error, false);
+      console.error('Failed to save server index:', error);
       throw error;
     }
   }
@@ -387,7 +343,7 @@ export default {
       const data = await env.SERVER_MONITOR?.get(`server_${serverId}`);
       return data ? JSON.parse(data) : null;
     } catch (error) {
-      secureLog('Failed to get server by id', error, false);
+      console.error('Failed to get server by id:', error);
       return null;
     }
   }
@@ -397,7 +353,7 @@ export default {
     try {
       await env.SERVER_MONITOR?.put(`server_${serverId}`, JSON.stringify(serverData));
     } catch (error) {
-      secureLog('Failed to save server by id', error, false);
+      console.error('Failed to save server by id:', error);
       throw error;
     }
   }
@@ -407,7 +363,7 @@ export default {
     try {
       await env.SERVER_MONITOR?.delete(`server_${serverId}`);
     } catch (error) {
-      secureLog('Failed to delete server by id', error, false);
+      console.error('Failed to delete server by id:', error);
       throw error;
     }
   }
@@ -419,7 +375,7 @@ export default {
       const results = await Promise.all(promises);
       return results.filter(server => server !== null);
     } catch (error) {
-      secureLog('Failed to get batch servers', error, false);
+      console.error('Failed to get batch servers:', error);
       return [];
     }
   }
@@ -782,7 +738,10 @@ export default {
         headers: { 'Content-Type': 'application/json' }
       });
     } catch (error) {
-      return createErrorResponse(error, 500, false);
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
   }
   
@@ -916,9 +875,8 @@ export default {
           });
         }
         
-        const passwordValidation = validatePasswordComplexity(settings.auth.password);
-        if (!passwordValidation.valid) {
-          return new Response(JSON.stringify({ error: passwordValidation.message }), {
+        if (settings.auth.password.length < 4) {
+          return new Response(JSON.stringify({ error: '登录密码长度不能少于4位' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json' }
           });
@@ -992,7 +950,7 @@ export default {
   async function checkAndNotifyExpired订阅(env) {
     try {
       if (!env.SERVER_MONITOR) {
-        secureLog('SERVER_MONITOR KV namespace is not bound', new Error('KV not bound'), false);
+        console.error('SERVER_MONITOR KV namespace is not bound');
         return;
       }
 
@@ -1031,7 +989,7 @@ export default {
         await sendBatchTelegramNotification(expiredServers, warningServers, env);
       }
     } catch (error) {
-      secureLog('Check expired 订阅 error', error, false);
+      console.error('Check expired 订阅 error:', error);
     }
   }
   
@@ -1095,7 +1053,7 @@ export default {
         try {
           await sendBarkMessageByUrl(config.bark.url, '订阅到期监控报告', message);
         } catch (e) {
-          secureLog('Send batch bark notification error', e, false);
+          console.error('Send batch bark notification error:', e);
         }
       }
 
@@ -1112,7 +1070,7 @@ export default {
         });
       }
     } catch (error) {
-      secureLog('Send batch telegram notification error', error, false);
+      console.error('Send batch telegram notification error:', error);
     }
   }
 
@@ -1152,7 +1110,7 @@ export default {
         try {
           await sendBarkMessageByUrl(config.bark.url, '订阅到期提醒', message);
         } catch (e) {
-          secureLog('Bark send error', e, false);
+          console.error('Bark send error:', e);
         }
       }
 
@@ -5625,35 +5583,6 @@ export default {
               }
           }
           
-          // 前端密码复杂度验证函数
-          function validatePasswordComplexityFrontend(password) {
-              if (!password || password.length < 8) {
-                  return { valid: false, message: '密码长度不能少于8位' };
-              }
-              
-              // 检查是否包含大写字母
-              if (!/[A-Z]/.test(password)) {
-                  return { valid: false, message: '密码必须包含至少一个大写字母' };
-              }
-              
-              // 检查是否包含小写字母
-              if (!/[a-z]/.test(password)) {
-                  return { valid: false, message: '密码必须包含至少一个小写字母' };
-              }
-              
-              // 检查是否包含数字
-              if (!/[0-9]/.test(password)) {
-                  return { valid: false, message: '密码必须包含至少一个数字' };
-              }
-              
-              // 检查是否包含特殊字符
-              if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-                  return { valid: false, message: '密码必须包含至少一个特殊字符' };
-              }
-              
-              return { valid: true };
-          }
-          
           // 控制登录验证配置的启用/禁用
           function toggleAuthConfig() {
               const enableCheckbox = document.getElementById('enableAuth');
@@ -5698,11 +5627,9 @@ export default {
 
           function generate2FA() {
               const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-              const array = new Uint8Array(16);
-              crypto.getRandomValues(array);
               let secret = '';
               for (let i = 0; i < 16; i++) {
-                  secret += chars[array[i] % chars.length];
+                  secret += chars.charAt(Math.floor(Math.random() * chars.length));
               }
               const input = document.getElementById('twoFactorSecret');
               input.value = secret;
@@ -6540,7 +6467,7 @@ export default {
               const tagColorName = tagColorInput.value;
               
               if (tagText.trim()) {
-                  preview.innerHTML = '<i class="iconfont icon-tags"></i>' + escapeHtml(tagText);
+                  preview.innerHTML = '<i class="iconfont icon-tags"></i>' + tagText;
                   // 获取实际颜色值并设置样式
                   const colorValue = getColorValue(tagColorName);
                   preview.style.backgroundColor = colorValue + '20'; // 20% 透明度
@@ -7251,7 +7178,7 @@ export default {
                   const tagColor = document.getElementById('editTagColor').value;
                   
                   if (tagInput.value.trim()) {
-                      tagPreview.innerHTML = '<i class="iconfont icon-tags"></i>' + escapeHtml(tagInput.value.trim());
+                      tagPreview.innerHTML = '<i class="iconfont icon-tags"></i>' + tagInput.value.trim();
                       // 使用与卡片一致的透明背景样式
                       tagPreview.style.backgroundColor = tagColor + '20'; // 20% 透明度
                       tagPreview.style.color = tagColor;
@@ -8540,7 +8467,7 @@ export default {
               // 更新预览
               if (tagInput && tagPreview) {
                   if (tagInput.value.trim()) {
-                      tagPreview.innerHTML = '<i class="iconfont icon-tags"></i>' + escapeHtml(tagInput.value.trim());
+                      tagPreview.innerHTML = '<i class="iconfont icon-tags"></i>' + tagInput.value.trim();
                       // 获取实际颜色值并设置样式
                       const colorValue = getColorValue(colorName);
                       tagPreview.style.backgroundColor = colorValue + '20'; // 20% 透明度
@@ -9866,8 +9793,8 @@ async function checkAuth(request, env) {
         const timestamp = parseInt(timestampStr);
         const currentTime = Math.floor(Date.now() / 1000);
         
-        // 检查token是否过期（15分钟有效期）
-        const TOKEN_VALIDITY = 15 * 60; // 15分钟
+        // 检查token是否过期（30分钟有效期）
+        const TOKEN_VALIDITY = 30 * 60; // 30分钟
         if (currentTime - timestamp > TOKEN_VALIDITY) {
             return { isAuthenticated: false };
         }
@@ -9957,7 +9884,7 @@ async function handleLogin(request, env) {
             status: 200,
             headers: { 
                 'Content-Type': 'application/json',
-                'Set-Cookie': `auth_token=${token}; Path=/; HttpOnly; ${secureFlag}SameSite=Strict; Max-Age=900`
+                'Set-Cookie': `auth_token=${token}; Path=/; HttpOnly; ${secureFlag}SameSite=Strict; Max-Age=1800`
             }
         });
         
