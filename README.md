@@ -17,3 +17,16 @@ bash pve-backup-qemu+lxc.sh 104
 4. 查看所有 UDP 转发服务
 5. 停止并禁用转发服务
 6. 退出
+
+3.Port Forward Manager
+
+=== Port Forward Manager ===
+1) 安装依赖
+2) 新增转发
+3) 查看规则列表
+4) 查看端口状态
+5) 禁用端口
+6) 重载端口
+7) 清空全部规则
+8) 退出
+请选择 [1-8]: 
